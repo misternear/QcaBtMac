@@ -109,16 +109,17 @@ Having the same QCA9377 or QCA6174 silicon **does not guarantee out-of-the-box c
 - **Cause:** On laptops such as the Acer Aspire E5-575, the QCA9377 USB Bluetooth endpoint does not cleanly reset across warm reboots and remains hung on the XHCI bus until power is cut.
 - **Workaround:** Always perform a full **Shut Down** rather than **Restart**. Because the Embedded Controller (EC) and USB rails can occasionally retain standby power even after shutdown, cold-boot enumeration can still be intermittent; if Bluetooth fails to appear after powering on, shut down, unplug AC power, hold the power button for 10–15 seconds to discharge residual rail power, and power back on.
 
-### 2. macOS 15.7.5 `bluetoothd` Crashes / Disconnect Flicker with Classic Audio / TWS Devices
-- **Symptom:** Bluetooth scanning works, but connecting to certain Bluetooth Classic audio devices (such as EDIFIER X2s TWS earbuds) causes Bluetooth to turn off for a split second and immediately turn back on without connecting.
-- **Cause:** During Classic link encryption (`HCIEvent EncryptionChange`), the QCA9377 controller reports `key size = 255` (`0xFF`) with `Encryption E0 enabled`. On macOS 15.7.5, `bluetoothd` can fault (`EXC_GUARD` / `CBCrash`: `Transport layer initialization failed`) and respawn mid-handshake—particularly when stale link keys or `PersistentPorts` RFCOMM entries exist in `/Library/Preferences/com.apple.Bluetooth.plist`.
+### 2. macOS 15.7.5 `bluetoothd` Faults / Disconnect Flicker with Classic Audio / TWS Devices
+- **Symptom:** Bluetooth scanning works, but connecting to certain Bluetooth Classic audio devices (such as EDIFIER X2s TWS earbuds) causes Bluetooth to toggle off briefly and immediately turn back on without connecting.
+- **Cause:** During Classic link encryption (`HCIEvent EncryptionChange`), the QCA9377 controller reports `key size = 255` (`0xFF`) with `Encryption E0 enabled`. On macOS 15.7.5, `bluetoothd` can log an `EXC_GUARD` fault (`Transport layer initialization failed`) and respawn mid-handshake when stale pairing records exist in macOS Sequoia's Bluetooth database (`/Library/Bluetooth/`) or when the controller has not been freshly initialized from a cold boot. *(Note: Legacy `/Library/Preferences/com.apple.Bluetooth.plist` paths no longer exist on macOS Sequoia.)*
 - **Workaround:**
-  1. Remove the cached Bluetooth preference plists and restart `bluetoothd`:
+  1. Remove the cached macOS Sequoia Bluetooth pairing database files:
      ```sh
-     sudo rm -f /Library/Preferences/com.apple.Bluetooth.plist ~/Library/Preferences/ByHost/com.apple.Bluetooth*
-     sudo pkill -9 bluetoothd
+     sudo rm -f /Library/Bluetooth/Library/Preferences/com.apple.MobileBluetooth.devices.plist \
+                /Library/Bluetooth/com.apple.MobileBluetooth.ledevices.*
      ```
-  2. Put the earbuds/headset into fresh **pairing mode** (not passive reconnect) and pair again.
+  2. Perform a full **Shut Down** (cold boot) and power the laptop back on so the QCA9377 controller and `bluetoothd` initialize cleanly.
+  3. Put the earbuds/headset into fresh **pairing mode** (not passive reconnect) and pair immediately in **System Settings > Bluetooth**.
 
 ### 3. Sleep / Wake Instability
 - Depending on your laptop's ACPI `_PRW` / USB power-gating behavior during S3 sleep, the QCA9377 module may lose power without triggering a clean USB re-enumeration on wake, requiring a cold boot to restore Bluetooth.
