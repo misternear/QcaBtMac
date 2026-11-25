@@ -109,17 +109,44 @@ Having the same QCA9377 or QCA6174 silicon **does not guarantee out-of-the-box c
 - **Cause:** On laptops such as the Acer Aspire E5-575, the QCA9377 USB Bluetooth endpoint does not cleanly reset across warm reboots and remains hung on the XHCI bus until power is cut.
 - **Workaround:** Always perform a full **Shut Down** rather than **Restart**. Because the Embedded Controller (EC) and USB rails can occasionally retain standby power even after shutdown, cold-boot enumeration can still be intermittent; if Bluetooth fails to appear after powering on, shut down, unplug AC power, hold the power button for 10–15 seconds to discharge residual rail power, and power back on.
 
-### 2. macOS 15.7.5 `bluetoothd` Faults / Disconnect Flicker with Classic Audio / TWS Devices
-- **Symptom:** Bluetooth scanning works, but connecting to certain Bluetooth Classic audio devices (such as EDIFIER X2s TWS earbuds) causes Bluetooth to toggle off briefly and immediately turn back on without connecting.
-- **Cause:** During Classic link encryption (`HCIEvent EncryptionChange`), the QCA9377 controller reports `key size = 255` (`0xFF`) with `Encryption E0 enabled`. On macOS 15.7.5, `bluetoothd` can log an `EXC_GUARD` fault (`Transport layer initialization failed`) and respawn mid-handshake when stale pairing records exist in macOS Sequoia's Bluetooth database (`/Library/Bluetooth/`) or when the controller has not been freshly initialized from a cold boot. *(Note: Legacy `/Library/Preferences/com.apple.Bluetooth.plist` paths no longer exist on macOS Sequoia.)*
-- **Workaround:**
-  1. Remove the cached macOS Sequoia Bluetooth pairing database files:
-     ```sh
-     sudo rm -f /Library/Bluetooth/Library/Preferences/com.apple.MobileBluetooth.devices.plist \
-                /Library/Bluetooth/com.apple.MobileBluetooth.ledevices.*
-     ```
-  2. Perform a full **Shut Down** (cold boot) and power the laptop back on so the QCA9377 controller and `bluetoothd` initialize cleanly.
-  3. Put the earbuds/headset into fresh **pairing mode** (not passive reconnect) and pair immediately in **System Settings > Bluetooth**.
+### 2. `bluetoothd` `SIGBUS` / Disconnect Flicker After Boot (APFS Hash Mismatch)
+- **Symptom:** Bluetooth scanning works right after booting, but connecting to devices (such as Classic audio / TWS earbuds) or waiting too long after boot causes Bluetooth to toggle off briefly and immediately turn back on without connecting.
+- **Cause:** `bluetoothd` crashes with `EXC_BAD_ACCESS` / `SIGBUS` (`KERN_MEMORY_ERROR`) and respawns mid-connection. On affected APFS/NVMe setups, `decmpfs_pagein_compressed` (`apfs_pagein_with_verification`) fails with `apfs_announce_hash_mismatch` (`error 94` / `EBADMSG`) when paging in cold blocks of `/usr/sbin/bluetoothd` from the sealed system volume.
+- **Workaround:** Pre-read `/usr/sbin/bluetoothd` into the kernel page cache via sequential `read()` (`VNOP_READ`), which bypasses the failing `apfs_pagein` path:
+  ```sh
+  cat /usr/sbin/bluetoothd > /dev/null
+  ```
+  To automate this at boot and periodically so the pages stay warm in cache, install `/Library/LaunchDaemons/local.bluetoothd.keepwarm.plist`:
+  ```xml
+  <?xml version="1.0" encoding="UTF-8"?>
+  <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+  <plist version="1.0">
+  <dict>
+  	<key>Label</key>
+  	<string>local.bluetoothd.keepwarm</string>
+  	<key>ProgramArguments</key>
+  	<array>
+  		<string>/bin/sh</string>
+  		<string>-c</string>
+  		<string>cat /usr/sbin/bluetoothd &gt; /dev/null</string>
+  	</array>
+  	<key>RunAtLoad</key>
+  	<true/>
+  	<key>StartInterval</key>
+  	<integer>300</integer>
+  </dict>
+  </plist>
+  ```
+  Set permissions and load it with:
+  ```sh
+  sudo chown root:wheel /Library/LaunchDaemons/local.bluetoothd.keepwarm.plist
+  sudo chmod 644 /Library/LaunchDaemons/local.bluetoothd.keepwarm.plist
+  sudo launchctl bootstrap system /Library/LaunchDaemons/local.bluetoothd.keepwarm.plist
+  ```
+  To unload/disable it later:
+  ```sh
+  sudo launchctl bootout system/local.bluetoothd.keepwarm
+  ```
 
 ### 3. Sleep / Wake Instability
 - Depending on your laptop's ACPI `_PRW` / USB power-gating behavior during S3 sleep, the QCA9377 module may lose power without triggering a clean USB re-enumeration on wake, requiring a cold boot to restore Bluetooth.
